@@ -47,7 +47,7 @@ class CollaborativeOptimizer(DecentralizedOptimizerBase):
 
     :note: This optimizer behaves unlike regular pytorch optimizers in two ways:
 
-    - calling .step will periodially zero-out gradients w.r.t. model parameters after each step
+    - calling .step will periodically zero-out gradients w.r.t. model parameters after each step
     - it may take multiple .step calls without updating model parameters, waiting for peers to accumulate enough samples
 
     :param opt: a standard pytorch optimizer, preferably a large-batch one such as LAMB, LARS, etc.
@@ -71,6 +71,7 @@ class CollaborativeOptimizer(DecentralizedOptimizerBase):
     :param scheduler: if specified, use this scheduler to update optimizer learning rate
     :note: if you are using CollaborativeOptimizer with a lr_scheduler, it is recommended to pass this scheduler
       explicitly into this class. Otherwise, scheduler may not be synchronized between peers.
+    :param client_mode: if True, runs training without incoming connections, in a firewall-compatible mode
     """
 
     def __init__(self, opt: torch.optim.Optimizer, *, dht: DHT, prefix: str, target_batch_size: int,
@@ -78,7 +79,7 @@ class CollaborativeOptimizer(DecentralizedOptimizerBase):
                  min_refresh_period: float = 0.5, max_refresh_period: float = 30, default_refresh_period: float = 3,
                  expected_drift_peers: float = 3, expected_drift_rate: float = 0.2, performance_ema_alpha: float = 0.1,
                  metadata_expiration: float = 30.0, averaging_timeout: Optional[float] = None, verbose: bool = False,
-                 **kwargs):
+                 client_mode: bool = False, **kwargs):
         super().__init__(opt, dht)
         self.prefix, self.scheduler = prefix, scheduler
         self.target_batch_size, self.batch_size_per_step = target_batch_size, batch_size_per_step
@@ -87,6 +88,7 @@ class CollaborativeOptimizer(DecentralizedOptimizerBase):
         self.expected_drift_peers, self.expected_drift_rate = expected_drift_peers, expected_drift_rate
         self.averaging_timeout, self.metadata_expiration = averaging_timeout, metadata_expiration
         self.status_loglevel = logging.INFO if verbose else logging.DEBUG
+        self.client_mode = client_mode
         self.averager = self._make_averager(**kwargs)
 
         self.training_progress_key = f"{self.prefix}_progress"
@@ -106,7 +108,8 @@ class CollaborativeOptimizer(DecentralizedOptimizerBase):
 
     def _make_averager(self, **kwargs):
         return TrainingAverager(self.opt, dht=self.dht, average_parameters=True, average_gradients=True,
-                                prefix=f"{self.prefix}_averaging", allreduce_timeout=self.averaging_timeout, **kwargs)
+                                prefix=f"{self.prefix}_averaging", allreduce_timeout=self.averaging_timeout,
+                                listen=not self.client_mode, **kwargs)
 
     @property
     def local_step(self) -> int:
